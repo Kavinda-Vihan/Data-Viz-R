@@ -1,0 +1,272 @@
+---
+title: "Global Food Consumption Throughout History"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    vertical_layout: fill
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(ggplot2)
+library(plotly)
+library(dplyr)
+library(shiny)
+library(rworldmap)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(leaflet)
+library(scales)
+
+fao <- read.csv("fao1.csv")
+
+world_map <- map_data("world")
+
+fao <- fao %>%
+  mutate(region = recode(region, "United States of America" = "USA",
+                            "Antigua and Barbuda" = "Barbuda",
+                            "China, mainland" = "China",
+                            "Cabo Verde" = "Cape Verde",
+                            "Cote d'Ivoire" = "Ivory Coast",
+                            "Congo" = "Democratic Republic of the Congo",
+                            "Lao People's Democratic Republic" = "Laos",
+                            "Trinidad and Tobago" = "Trinidad",
+                            "Iran (Islamic Republic of)" = "Iran",
+                            "Republic of Moldova" = "Moldova",
+                            "Saint Vincent and the Grenadines" = "Saint Vincent",
+                            "United Kingdom" = "UK",
+                            "Venezuela (Bolivarian Republic of)" = "Venezuela",
+                            "Bolivia (Plurinational State of)" = "Bolivia",
+                            "China, Taiwan Province of" = "Taiwan",
+                            "Czechia" = "Czech Republic",
+                            "Russian Federation" = "Russia",
+                            "The former Yugoslav Republic of Macedonia" = "North Macedonia",
+                            "United Republic of Tanzania" = "Tanzania",
+                            "Viet Nam" = "Vietnam",
+                            "Brunei Darussalam" = "Brunei",
+                            "Democratic People's Republic of Korea" = "North Korea",
+                            "Republic of Korea" = "South Korea",
+                            "Saint Kitts and Nevis" = "Saint Kitts"))
+
+
+```
+
+# Global Food Trends
+
+Inputs {.sidebar}
+-----------------------------------------------------------------------
+
+```{r}
+selectInput('food_type', label = "Food Type",
+     choices = unique(fao$Item),
+     selected = 1)
+
+sliderInput("rng", "Year", value = c(1961, 2013), min = 1961, max = 2013, sep = "")
+
+```
+Global food consumption data for 115 different food types between the years 1961 and 2013. The intention of this dashboard is to provide meaningful insights on the history of global food consumption, the types of foods produced in various countries, and the distribution of food around the world.
+
+All quantities are measured in 1000's of tonnes.
+
+Data for this dashboard was obtained from the Food and Agriculture Organization of the United Nations (FAO, 2014). Reference material for the map visual was obtained from Paula Moraga's book, "Geospatial Health Data: Modeling and Visualization with R-INLA and Shiny" (Moraga, 2019).
+
+```{r}
+
+map <- ne_countries()
+names(map)[names(map) == "iso_a3"] <- "ISO3"
+names(map)[names(map) == "name"] <- "NAME"
+
+d <- reactive({
+  d <- fao[fao$Item == input$food_type & fao$Year >= input$rng[1] &    fao$Year <= input$rng[2],]
+  setNames(aggregate(d$Quantity, list(d$region, d$Area.Abbreviation), sum), c("region","ISO3","Quantity"))
+})
+
+```
+
+Column {data-width=650}
+-----------------------------------------------------------------------
+
+### Food Consumption by Country (Map View)
+
+```{r}
+
+renderLeaflet({
+  map$Quantity <- d()[match(map$ISO3, d()$ISO3), "Quantity"]
+
+  pal <- colorBin(
+    palette = "viridis", domain = map$Quantity,
+    bins = seq(0, max(map$Quantity, na.rm = TRUE) + 10, by = ceiling(max(map$Quantity, na.rm = TRUE)/10),)
+  )
+
+  map$labels <- paste0(
+    "<strong> Country: </strong> ",
+    map$NAME, "<br/> ",
+    "<strong> Quantity: </strong> ",
+    prettyNum(map$Quantity, big.mark = ","), "<br/> "
+  ) %>%
+    lapply(htmltools::HTML)
+
+  mapFiltered <- reactive({map})
+    if (nrow(mapFiltered()) == 0) {
+      return(NULL)
+    }
+
+  leaflet(mapFiltered()) %>%
+    addTiles() %>%
+    setView(lng = 0, lat = 30, zoom = 2) %>%
+    addPolygons(
+      fillColor = ~ pal(Quantity),
+      color = "white",
+      fillOpacity = 0.7,
+      label = ~labels,
+      highlight = highlightOptions(
+        color = "black",
+        bringToFront = TRUE
+      )
+    ) %>%
+    leaflet::addLegend(
+      pal = pal, values = ~Quantity,
+      opacity = 0.7, title = "Quantity (1000's of tonnes)"
+    )
+
+})
+
+
+```
+
+Column {data-width=350}
+-----------------------------------------------------------------------
+
+### Total Food Consumption Over Time
+
+```{r}
+renderPlotly({
+  
+  item_agg <- aggregate(fao$Quantity, list(fao$Item, fao$Year), sum)
+  input <- item_agg[item_agg$Group.1 == input$food_type & item_agg$Group.2 >= input$rng[1] & item_agg$Group.2 <= input$rng[2],]
+  p1a <- ggplot(data=input, aes(x=Group.2, y=x, group=1)) +
+  geom_line(color="red") +
+  geom_point(color="red") +
+  scale_y_continuous(labels = comma)
+    
+  g <- ggplotly(p1a, source = 'source', tooltip = "text") %>% 
+    layout(dragmode = 'lasso', 
+           yaxis = list(title = "Quantity (1000's of tonnes)"), 
+           xaxis = list(title = "Year"), 
+           margin = list(l = 100), 
+           font = list(family = 'Arial', size = 10)) %>%
+    event_register("plotly_selecting")
+  
+})  
+
+
+```
+
+### Food Consumption by Country (Table View)
+
+```{r}
+
+renderTable({
+  tbl_filtered <- fao[fao$Item == input$food_type & fao$Year >= input$rng[1] & fao$Year <= input$rng[2],]
+  tbl_input <- setNames(aggregate(tbl_filtered$Quantity, list(tbl_filtered$region), sum), c("Country","Quantity"))
+  tbl_input$"Quantity (1000's of tonnes)" <- prettyNum(tbl_input$Quantity, big.mark = ",")
+  tbl_input <- tbl_input[order(tbl_input$Quantity, decreasing = TRUE),]
+  subset(tbl_input, select = -c(Quantity) )
+})
+
+```
+
+# Food Trends by Country
+
+Inputs {.sidebar}
+-----------------------------------------------------------------------
+
+```{r}
+selectInput('country', label = "Country",
+     choices = unique(fao$region),
+     selected = 1)
+
+sliderInput("rng2", "Year", value = c(1961, 2013), min = 1961, max = 2013, sep = "")
+```
+
+Global food consumption data for 115 different food types between the years 1961 and 2013. The intention of this dashboard is to provide meaningful insights on the history of global food consumption, the types of foods produced in various countries, and the distribution of food around the world.
+
+All quantities are measured in 1000's of tonnes.
+
+Data for this dashboard was obtained from the Food and Agriculture Organization of the United Nations (FAO, 2014). Reference material for the map visual was obtained from Paula Moraga's book, "Geospatial Health Data: Modeling and Visualization with R-INLA and Shiny" (Moraga, 2019).
+
+Column {data-width=650}
+-----------------------------------------------------------------------
+
+### Top 5 Food Types Over Time
+
+```{r}
+renderPlotly({
+  
+  line_filtered <- fao[fao$region == input$country & fao$Year >= input$rng2[1] &    fao$Year <= input$rng2[2],]
+  region_agg <- setNames(aggregate(line_filtered$Quantity, list(line_filtered$region, line_filtered$Item), sum), c("Country","Item","Quantity"))
+  region_agg <- region_agg[order(region_agg$Quantity, decreasing = TRUE),][1:5,]
+  line_filtered <- line_filtered[line_filtered$Item %in% region_agg$Item,]
+  p1 <- ggplot(data=line_filtered, aes(x=Year, y=Quantity, group=Item, color=Item)) +
+  geom_line() +
+  geom_point() + 
+  guides(color = guide_legend(title = "Food Type"))  +
+  scale_y_continuous(labels = comma)
+    
+  g <- ggplotly(p1, source = 'source', tooltip = "text") %>% 
+    layout(dragmode = 'lasso', 
+           yaxis = list(title = "Quantity (1000's of tonnes)"), 
+           xaxis = list(title = "Year"), 
+           margin = list(l = 100), 
+           font = list(family = 'Arial', size = 10)) %>%
+    event_register("plotly_selecting")
+  
+})  
+```
+
+### Total Consumption Over Time
+
+```{r}
+renderPlotly({
+  
+  line_filtered <- fao[fao$region == input$country & fao$Year >= input$rng2[1] &    fao$Year <= input$rng2[2],]
+  region_agg <- setNames(aggregate(line_filtered$Quantity, list(line_filtered$Year), sum), c("Year","Quantity"))
+  p2<-ggplot(data=region_agg, aes(x=Year, y=Quantity)) +
+  geom_bar(stat="identity", fill="steelblue") +
+  scale_y_continuous(labels = comma)
+    
+  g <- ggplotly(p2, source = 'source', tooltip = "text") %>% 
+    layout(dragmode = 'lasso', 
+           yaxis = list(title = "Quantity (1000's of tonnes)"), 
+           xaxis = list(title = "Year"), 
+           margin = list(l = 100), 
+           font = list(family = 'Arial', size = 10)) %>%
+    event_register("plotly_selecting")
+  
+})  
+```
+
+Column {data-width=350}
+-----------------------------------------------------------------------
+
+### Total Consumption By Food Type
+
+```{r}
+renderPlotly({
+  
+  line_filtered <- fao[fao$region == input$country & fao$Year >= input$rng2[1] &    fao$Year <= input$rng2[2],]
+  region_agg <- setNames(aggregate(line_filtered$Quantity, list(line_filtered$Item), sum), c("Item","Quantity"))
+  region_agg$Item <- reorder(x = region_agg$Item, X = region_agg$Quantity, FUN = sum)
+  
+  ticklabels <- seq(from=0, to=round(max(region_agg$Quantity)), by=50000)
+  ticktexts <- c(0,paste(ticklabels[-1]/1000, " 000", sep=","))
+  fig <- plot_ly(region_agg, x = ~Quantity, y = ~Item, type = "bar", orientation = 'h', text = prettyNum(region_agg$Quantity, big.mark = ","), textposition='outside') %>%
+  layout(xaxis = list(title = "Quantity (1000's of tonnes)"), yaxis = list(title = 'Food Type'), font = list(family = 'Arial', size = 10))
+})  
+```
+
+# References
+
+1.	Food and Agriculture Organization of the United Nations. (2014). FAOSTAT. www.fao.org. https://www.fao.org/faostat/en/#home
+2.	Moraga, P. (2019). Geospatial Health Data: Modeling and Visualization with R-INLA and Shiny. In www.paulamoraga.com. CRC Press. https://www.paulamoraga.com/book-geospatial/sec-flexdashboard.html
