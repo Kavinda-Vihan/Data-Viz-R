@@ -1,4 +1,4 @@
-Global-Food-Consumption-ShinyApp - 
+Global-Food-Consumption-ShinyApp - An interactive Shiny app intended to provide meaningful insights on the history of global food consumption, the types of foods produced in various countries, and the distribution of food around the world.
 
 Access dashboard here - https://cobigm-kavinda-goonesekere.shinyapps.io/Assignment3-S3987368/
 
